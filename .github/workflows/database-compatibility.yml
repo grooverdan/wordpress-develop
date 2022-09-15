@@ -1,0 +1,206 @@
+name: Database Compatibility Tests
+
+on:
+  # The database compatiblity test suite was introduced in WordPress 6.1.
+  push:
+    branches:
+      - database_ci
+      - trunk
+      - '6.[1-9]'
+      - '[7-9].[0-9]'
+    tags:
+      - '[0-9]+.[0-9]'
+      - '[0-9]+.[0-9].[0-9]+'
+      - '![345].[0-9].[0-9]+'
+      - '!6.0.[0-9]+'
+  pull_request:
+    branches:
+      - trunk
+      - '6.[1-9]'
+      - '[7-9].[0-9]'
+  workflow_dispatch:
+
+# Cancels all previous workflow runs for pull requests that have not completed.
+concurrency:
+  # The concurrency group contains the workflow name and the branch name for pull requests
+  # or the commit hash for any other events.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+env:
+  LOCAL_DIR: build
+
+jobs:
+  wordpress-build:
+    name: build wordpress
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure environment variables
+        run: |
+          echo "PHP_FPM_UID=$(id -u)" >> $GITHUB_ENV
+          echo "PHP_FPM_GID=$(id -g)" >> $GITHUB_ENV
+
+      - name: Checkout repository
+        uses: actions/checkout@2541b1294d2704b0964813337f33b291d3f8596b # v3.0.2
+
+      - name: Log debug information
+        run: |
+          npm --version
+          node --version
+          curl --version
+          git --version
+          svn --version
+          php --version
+          php -i
+          locale -a
+
+      - name: Install NodeJS
+        uses: actions/setup-node@2fddd8803e2f5c9604345a0b591c3020ee971a93 # v3.4.1
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build WordPress
+        run: npm run build
+
+      - name: Tar artifacts
+        run: tar -cf archive.tar ${{ env.LOCAL_DIR }} node_modules/ packagehash.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@3cea5372237819ed00197afe530f5a7ea3e805c8 # v3.1.0
+        with:
+          name: wordpress
+          retention-days: 5
+          path: archive.tar
+
+      - name: General debug information
+        run: |
+          npm --version
+          node --version
+          curl --version
+          git --version
+          svn --version
+
+
+  # Runs the database compatibility test suite.
+  #
+  # Performs the following steps:
+  # - Sets environment variables.
+  # - Checks out the repository.
+  # - Logs debug information about the GitHub Action runner.
+  # - Installs NodeJS.
+  # _ Installs NPM dependencies.
+  # - Builds WordPress to run from the `build` directory.
+  # - Starts the WordPress Docker container.
+  # - Logs general debug information.
+  # - Logs the running Docker containers.
+  # - Logs Docker debug information (about both the Docker installation within the runner and the WordPress container).
+  # - Install WordPress within the Docker container.
+  # - Run the E2E tests.
+  # - Ensures version-controlled files are not modified or deleted.
+  database-tests:
+    name: Database Test ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    needs: [ wordpress-build ]
+    timeout-minutes: 10
+    # TODO tmpremoval if: ${{ github.repository == 'WordPress/wordpress-develop' || github.event_name == 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - mysql:5.7
+          - mysql:latest
+          - mariadb:10.3
+          - mariadb:latest
+          - quay.io/mariadb-foundation/mariadb-devel:earliest
+          - quay.io/mariadb-foundation/mariadb-devel:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@2541b1294d2704b0964813337f33b291d3f8596b # v3.0.2
+
+      - name: Download artifact
+        uses: actions/download-artifact@fb598a63ae348fa914e94cd0ff38f362e927b741 # @v3.0.0
+        with:
+          name: wordpress
+
+      - name: untar
+        run: tar -xf archive.tar
+
+      - name: Docker debug information
+        run: |
+          docker -v
+          docker-compose -v
+          docker-compose run --rm php php --version
+          docker-compose run --rm php php -m
+          docker-compose run --rm php php -i
+          docker-compose run --rm php locale -a
+
+      - name: Start Docker environment
+        run: |
+          export LOCAL_DB_IMAGE=${{ matrix.image }}
+          npm run env:start
+
+      - name: Log running Docker containers
+        run: docker ps -a
+
+#      - name: Docker debug information
+#        run: |
+#          docker-compose exec -t wordpress-develop_mysql_1 mysql -ppassword -e 'select version();'
+#          docker-compose exec wordpress-develop_mysql_1 sh -c '[ -f /manifest.txt ] && cat /manifest.txt'
+
+      - name: Configure environment variables
+        run: |
+          echo "PHP_FPM_UID=$(id -u)" >> $GITHUB_ENV
+          echo "PHP_FPM_GID=$(id -g)" >> $GITHUB_ENV
+
+      - name: Install WordPress
+        run: npm run env:install
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+
+  slack-notifications:
+    name: Slack Notifications
+    uses: WordPress/wordpress-develop/.github/workflows/slack-notifications.yml@trunk
+    needs: [ database-tests ]
+    if: ${{ github.repository == 'WordPress/wordpress-develop' && github.event_name != 'pull_request' && always() }}
+    with:
+      calling_status: ${{ needs.database-tests.result == 'success' && 'success' || needs.database-tests.result == 'cancelled' && 'cancelled' || 'failure' }}
+    secrets:
+      SLACK_GHA_SUCCESS_WEBHOOK: ${{ secrets.SLACK_GHA_SUCCESS_WEBHOOK }}
+      SLACK_GHA_CANCELLED_WEBHOOK: ${{ secrets.SLACK_GHA_CANCELLED_WEBHOOK }}
+      SLACK_GHA_FIXED_WEBHOOK: ${{ secrets.SLACK_GHA_FIXED_WEBHOOK }}
+      SLACK_GHA_FAILURE_WEBHOOK: ${{ secrets.SLACK_GHA_FAILURE_WEBHOOK }}
+
+  failed-workflow:
+    name: Failed workflow tasks
+    runs-on: ubuntu-latest
+    needs: [ database-tests, slack-notifications ]
+    if: |
+      always() &&
+      github.repository == 'WordPress/wordpress-develop' &&
+      github.event_name != 'pull_request' &&
+      github.run_attempt < 2 &&
+      (
+        needs.database-tests.result == 'cancelled' || needs.database-tests.result == 'failure'
+      )
+
+    steps:
+      - name: Dispatch workflow run
+        uses: actions/github-script@c713e510dbd7d213d92d41b7a7805a986f4c5c66 # v6.2.0
+        with:
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'failed-workflow.yml',
+              ref: '${{ github.ref_name }}',
+              inputs: {
+                run_id: '${{ github.run_id }}'
+              }
+            });

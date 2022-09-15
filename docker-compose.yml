@@ -62,10 +62,10 @@ services:
       - localhost:host-gateway
 
   ##
-  # The MySQL container.
+  # The MySQL or MariaDB container.
   ##
   mysql:
-    image: amd64/${LOCAL_DB_TYPE-mysql}:${LOCAL_DB_VERSION-latest}
+    image: ${LOCAL_DB_IMAGE-amd64/mysql:5.7}
 
     networks:
       - wpdevnet
