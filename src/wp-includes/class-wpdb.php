@@ -191,6 +191,16 @@ class wpdb {
 	private $checking_collation = false;
 
 	/**
+	 * Array of cached determine charset/collations to make wpdb::determine_charset() lookups quicker.
+	 *
+	 * @since 6.4.0
+	 *
+	 * @see wpdb::determine_charset()
+	 * @var bool
+	 */
+	private $charset_collation_cache = array();
+
+	/**
 	 * Saved info on the table column.
 	 *
 	 * @since 0.71
@@ -863,27 +873,69 @@ class wpdb {
 			return compact( 'charset', 'collate' );
 		}
 
-		if ( 'utf8' === $charset && $this->has_cap( 'utf8mb4' ) ) {
-			$charset = 'utf8mb4';
+		$key = "$charset:$collate";
+		if ( array_key_exists( $key, $this->charset_collation_cache ) ) {
+			return $this->charset_collation_cache[ $key ];
 		}
 
+		// downgrade if unsupported
 		if ( 'utf8mb4' === $charset && ! $this->has_cap( 'utf8mb4' ) ) {
 			$charset = 'utf8';
 			$collate = str_replace( 'utf8mb4_', 'utf8_', $collate );
 		}
 
-		if ( 'utf8mb4' === $charset ) {
-			// _general_ is outdated, so we can upgrade it to _unicode_, instead.
-			if ( ! $collate || 'utf8_general_ci' === $collate ) {
-				$collate = 'utf8mb4_unicode_ci';
-			} else {
-				$collate = str_replace( 'utf8_', 'utf8mb4_', $collate );
-			}
+		// utf8mb4 given higher priority, but allow utf8 if not exists
+		$charset_preference = array( 'utf8mb4', 'utf8mb3' );
+		if ( 'utf8' === $charset ) {
+			array_push( $charset_preference, $charset );
+		} else {
+			// user preference comes first (if not utf8)
+			array_unshift( $charset_preference, $charset );
 		}
 
-		// _unicode_520_ is a better collation, we should use that when it's available.
-		if ( $this->has_cap( 'utf8mb4_520' ) && 'utf8mb4_unicode_ci' === $collate ) {
-			$collate = 'utf8mb4_unicode_520_ci';
+		// Higher priorities exist on collation
+		$collation_preference = array(
+			'uca1400_ai_ci',
+			'utf8mb4_0900_ai_ci',
+			'utf8mb4_unicode_520_ci',
+			'utf8mb4_unicode_ci',
+			'utf8mb4_general_ci',
+			'utf8_general_ci',
+		);
+		if ( substr( $collate, 0, 4 ) === 'utf8_' && $this->has_cap( 'utf8mb4' ) && substr( $collate, -10) != 'general_ci' ) {
+			// Assume a utf8mb4 variant exists, prefer than over specified $collate
+			array_unshift( $collation_preference, str_replace( 'utf8_', 'utf8mb4_', $collate ), $collate );
+		}
+
+		if ( in_array($collate, $collation_preference ) ) {
+			// Don't need to append to search for it, existing preference list applies.
+		} else {
+			// user preference comes first
+			array_unshift( $collation_preference, $collate );
+		}
+
+		$charset_str = "'" . implode("','", $charset_preference) . "'";
+		$charset_str_comma = implode(',', $charset_preference);
+		$collate_str = "'" . implode("','", $collation_preference) . "'";
+		$collate_str_comma = implode(',', $collation_preference);
+
+		$res = mysqli_query($this->dbh,
+			'SELECT COLLATION_NAME, CHARACTER_SET_NAME'
+			. ' FROM INFORMATION_SCHEMA.COLLATION_CHARACTER_SET_APPLICABILITY'
+			. ' WHERE CHARACTER_SET_NAME IN (' . $charset_str . ')'
+			. ' AND COLLATION_NAME IN (' . $collate_str . ')'
+			. ' ORDER BY FIND_IN_SET(COLLATION_NAME, \'' . $collate_str_comma . '\')'
+			. '   , FIND_IN_SET(CHARACTER_SET_NAME, \'' . $charset_str_comma . '\')'
+			. ' LIMIT 1');
+		if ( $res ) {
+			$row = $res->fetch_row();
+			if ( $row ) {
+				$collate = $row[ 0 ];
+				$charset = $row[ 1 ];
+				$ret = compact( 'charset', 'collate' );
+				$this->charset_collation_cache[ $key ] = $ret;
+				return $ret;
+			}
 		}
 
 		return compact( 'charset', 'collate' );
@@ -3509,6 +3561,10 @@ class wpdb {
 			'utf8mb3_general_ci',
 			'utf8mb4_bin',
 			'utf8mb4_general_ci',
+			'utf8mb4_unicode_520_ci',
+			'utf8mb4_0900_ai_ci',
+			'utf8mb4_uca1400_ai_ci',
+			'uca1400_ai_ci',
 		);
 
 		foreach ( $this->col_meta[ $table ] as $col ) {

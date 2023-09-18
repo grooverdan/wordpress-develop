@@ -839,7 +839,7 @@ function upgrade_all() {
 		upgrade_630();
 	}
 
-	if ( $wp_current_db_version < 56657 ) {
+	if ( $wp_current_db_version < 56752 ) {
 		upgrade_640();
 	}
 
@@ -2347,6 +2347,19 @@ function upgrade_640() {
 			wp_clear_scheduled_hook( 'wp_https_detection' );
 		}
 	}
+
+	if ( $wp_current_db_version < 56752 && wp_should_upgrade_global_tables() ) {
+		$tables = $wpdb->tables( 'global' );
+
+		// sitecategories may not exist.
+		if ( ! $wpdb->get_var( "SHOW TABLES LIKE '{$tables['sitecategories']}'" ) ) {
+			unset( $tables['sitecategories'] );
+		}
+
+		foreach ( $tables as $table ) {
+			maybe_convert_table_to_latest_collation( $table );
+		}
+	}
 }
 
 /**
@@ -2662,9 +2675,45 @@ function maybe_convert_table_to_utf8mb4( $table ) {
 		return true;
 	}
 
-	return $wpdb->query( "ALTER TABLE $table CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci" );
+	return $wpdb->query( "ALTER TABLE $table CONVERT TO CHARACTER SET utf8mb4 COLLATE $wpdb->collate" );
 }
 
+/**
+ * If a table only contains a not-current collation, convert to that collation.
+ *
+ * @since 6.4.0
+ *
+ * @global wpdb $wpdb WordPress database abstraction object.
+ *
+ * @param string $table The table to convert.
+ * @return bool True if the table was converted, false if it wasn't.
+ */
+function maybe_convert_table_to_latest_collation( $table ) {
+	global $wpdb;
+	$needed = false;
+
+	$results = $wpdb->get_results( "SHOW FULL COLUMNS FROM `$table`" );
+	if ( ! $results ) {
+		return false;
+	}
+
+	foreach ( $results as $column ) {
+		if ( $column->Collation ) {
+			if ( 'utf8' !== $charset && 'utf8mb4' !== $charset ) {
+				// Don't upgrade tables that have non-utf8 columns.
+				return false;
+			}
+			if ( $column->Collation != $wpdb->collate ) {
+				$needed = true;
+			}
+		}
+	}
+	if ( ! $needed ) {
+		return false;
+	}
+
+	return $wpdb->query( "ALTER TABLE $table CONVERT TO CHARACTER SET utf8mb4 COLLATE $wpdb->collate" );
+}
 /**
  * Retrieve all options as it was for 1.2.
  *

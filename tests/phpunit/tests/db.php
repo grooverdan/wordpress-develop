@@ -1454,6 +1454,9 @@ class Tests_DB extends WP_UnitTestCase {
 	/**
 	 * @ticket 32105
 	 * @ticket 36917
+	 * @ticket 58871
+	 *
+	 * @covers wpdb::determine_charset
 	 */
 	public function test_collate_switched_to_utf8mb4_520() {
 		global $wpdb;
@@ -1462,17 +1465,29 @@ class Tests_DB extends WP_UnitTestCase {
 			$this->markTestSkipped( 'This test requires utf8mb4_520 support.' );
 		}
 
+		$expected_collate = 'utf8mb4_unicode_520_ci';
+		if ( version_compare( $wpdb->db_version(), '10.10.1', '>=' ) ) {
+			$expected_collate = 'uca1400_ai_ci';
+		}
+		if ( version_compare( $wpdb->db_version(), '8.0.1', '>=' ) &&
+		     version_compare( $wpdb->db_version(), '10.0.0', '<' ) ) {
+			$expected_collate = 'utf8mb4_0900_ai_ci';
+		}
+
 		$charset = 'utf8';
 		$collate = 'utf8_general_ci';
 
 		$result = $wpdb->determine_charset( $charset, $collate );
 
-		$this->assertSame( 'utf8mb4_unicode_520_ci', $result['collate'] );
+		$this->assertSame( $expected_collate, $result['collate'] );
 	}
 
 	/**
 	 * @ticket 32405
 	 * @ticket 36917
+	 * @ticket 58871
+	 *
+	 * @covers wpdb::determine_charset
 	 */
 	public function test_non_unicode_collations() {
 		global $wpdb;
@@ -1481,12 +1496,21 @@ class Tests_DB extends WP_UnitTestCase {
 			$this->markTestSkipped( 'This test requires utf8mb4 support.' );
 		}
 
+		$expected_collate = 'utf8mb4_swedish_ci';
+		if ( version_compare( $wpdb->db_version(), '10.10.1', '>=' ) ) {
+			$expected_collate = 'uca1400_ai_ci';
+		}
+		if ( version_compare( $wpdb->db_version(), '8.0.1', '>=' ) &&
+		     version_compare( $wpdb->db_version(), '10.0.0', '<' ) ) {
+			$expected_collate = 'utf8mb4_0900_ai_ci';
+		}
+
 		$charset = 'utf8';
 		$collate = 'utf8_swedish_ci';
 
 		$result = $wpdb->determine_charset( $charset, $collate );
 
-		$this->assertSame( 'utf8mb4_swedish_ci', $result['collate'] );
+		$this->assertSame( $expected_collate, $result['collate'] );
 	}
 
 	/**
