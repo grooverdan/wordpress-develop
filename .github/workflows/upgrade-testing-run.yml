@@ -30,12 +30,12 @@ on:
         description: 'Database type. Valid types are mysql and mariadb.'
         required: false
         type: 'string'
-        default: 'mysql'
+        default: 'mariadb'
       db-version:
         description: 'Database version.'
         required: false
         type: 'string'
-        default: '5.7'
+        default: '10.11'
 
 jobs:
   # Runs upgrade tests on a build of WordPress.
