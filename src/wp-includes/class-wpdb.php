@@ -902,14 +902,13 @@ class wpdb {
 			'utf8mb4_general_ci',
 			'utf8_general_ci',
 		);
-		if ( substr( $collate, 0, 4 ) === 'utf8_' && $this->has_cap( 'utf8mb4' ) && substr( $collate, -10) != 'general_ci' ) {
-			// Assume a utf8mb4 variant exists, prefer than over specified $collate
-			array_unshift( $collation_preference, str_replace( 'utf8_', 'utf8mb4_', $collate ), $collate );
-		}
-
-		if ( in_array($collate, $collation_preference ) ) {
-			// Don't need to append to search for it, existing preference list applies.
-		} else {
+		if ( substr( $collate, -10) != 'general_ci' ) {
+			if ( substr( $collate, 0, 4 ) === 'utf8_' && $this->has_cap( 'utf8mb4' ) ) {
+				// Assume a utf8mb4 variant exists, prefer than over specified $collate
+				$collate = str_replace( 'utf8_', 'utf8mb4_', $collate );
+			}
+			array_unshift( $collation_preference, $collate );
+		} elseif (in_array($collate, $collation_preference ) ) {
 			// user preference comes first
 			array_unshift( $collation_preference, $collate );
 		}
