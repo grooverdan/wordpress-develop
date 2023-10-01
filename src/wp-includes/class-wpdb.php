@@ -4024,6 +4024,19 @@ class wpdb {
 			$server_info = mysql_get_server_info( $this->dbh );
 		}
 
+		/*
+		 * Account for MariaDB version being prefixed with '5.5.5-' on older PHP versions.
+		 *
+		 * Note: str_contains() is not used here, as this file can be included
+		 * directly outside of WordPress core, e.g. by HyperDB, in which case
+		 * the polyfills from wp-includes/compat.php are not loaded.
+		 */
+		if ( '5.5.5-' === substr( $server_info, 0, 6 ) && false !== strpos( $server_info, 'MariaDB' )
+			&& PHP_VERSION_ID < 80016 // PHP 8.0.15 or older.
+		) {
+			// Strip the '5.5.5-' prefix and set the version to the correct value.
+			$server_info = preg_replace( '/^5\.5\.5-(.*)/', '$1', $server_info );
+		}
 		return $server_info;
 	}
 }
